@@ -655,7 +655,7 @@ int main() {
               ref_vel = front_car_speed;
             }else{
               acceleration = MAX_ACCEL * (1 - exp(-3*speed_diff));
-              if(speed_diff>8){
+              if(speed_diff>12){
                 acceleration = 1;
               }
               ref_vel -= acceleration;
