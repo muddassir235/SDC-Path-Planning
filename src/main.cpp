@@ -10,9 +10,8 @@
 #include "json.hpp"
 #include "spline.h"
 #include "classifier.h"
-#include "vehicle.h"  
 #include "classifier.cpp"
-#include "vehicle.cpp"
+#include <algorithm>
   
 using namespace std;
 
@@ -25,10 +24,10 @@ constexpr double SIMULATOR_PERIOD = 0.02 /* seconds */;
 constexpr double LANE_WIDTH = 4.0 /* m */;
 constexpr double SPEED_LIMIT = 49.5 /* mph */;
 constexpr double TRACK_LENGTH = 6945.554 /* m */;
-constexpr double MAX_ACCEL = 0.400;
+constexpr double MAX_ACCEL = 0.300;
 constexpr double START_S = 124.834 /* m */;
 
-constexpr double COLLISSION_COST = 100000;
+constexpr double COLLISSION_COST = 1000000;
 constexpr double BUFFER_COST = 10000;
 constexpr double INEFFICIENCY_COST = 1000;
 constexpr double CONJETION_COST = 100;
@@ -265,6 +264,7 @@ vector<string> Load_Label(string file_name)
     
 }
 
+/* Get predictions for a certain car */
 vector<vector<double>> getpred(GNB gnb, vector<double> car, int horizon, vector<double> map_waypoints_x, vector<double> map_waypoints_y){
   int lane = (int)(car[D])/4;
   vector<double> coords;
@@ -292,23 +292,25 @@ vector<vector<double>> getpred(GNB gnb, vector<double> car, int horizon, vector<
   vector<vector<double>> predictions;
   for(int i=0; i<horizon; i++){
     int lane_ = lane;
-    if(i>1){
+    if(i>1){  
       lane_ = new_lane;
     }
-    predictions.push_back({(init_car_s+i*car_speed), (double)lane_, car_speed});
+    predictions.push_back({(init_car_s+i*car_speed), (double)lane_, car_speed, car[ID]});
   }
   return predictions;
 }
 
+/* Get predictions for all vehicles */
 map<int, vector<vector<double>>> get_predictions(GNB gnb, vector<vector<double>> sensor_fusion, vector<double> map_waypoints_x, vector<double> map_waypoints_y){
   map<int, vector<vector<double>>> predictions; 
   for(int i=0;i<sensor_fusion.size();i++){
-    vector<vector<double>> prediction = getpred(gnb, sensor_fusion[i], 1, map_waypoints_x, map_waypoints_y);
+    vector<vector<double>> prediction = getpred(gnb, sensor_fusion[i], 1 , map_waypoints_x, map_waypoints_y);
     predictions.insert(std::pair<int,vector<vector<double>>>(sensor_fusion[i][ID],prediction));
   }
   return predictions;
 }
 
+/* Get the cost for a certain lane */
 double get_lane_cost(int lane_index, vector<vector<vector<double>>> lane_data, double curr_s, double curr_ds){
   double start_s = curr_s;
 
@@ -317,7 +319,15 @@ double get_lane_cost(int lane_index, vector<vector<vector<double>>> lane_data, d
   double inefficiency_cost = 0.0;
   double conjetion_cost = 0.0;
   
+  vector<map<int, bool>> infront_list;
+  vector<vector<int>> ids_list;
+
+  bool collision_happened = false;
+
   for(int i=0; i<lane_data.size(); i++){
+    map<int, bool> infront;
+    vector<int> ids;
+
     double s = start_s+curr_ds*i;
   
     vector<vector<double>> curr_time_image = lane_data[i];
@@ -326,30 +336,38 @@ double get_lane_cost(int lane_index, vector<vector<vector<double>>> lane_data, d
     int rear_vehicle_index = -1;
     double front_vehicle_s = 999999;
     double rear_vehicle_s = -999999;
-  
+
     for(int j=0; j<curr_time_image.size(); j++){
       vector<double> vehicle = curr_time_image[j];
+      ids.push_back(vehicle[2 /* ID */]);
   
       if(s<vehicle[0 /* s */]){
         if(vehicle[0 /* s */]<front_vehicle_s){
-          front_vehicle_s = vehicle[0];
+          front_vehicle_s = vehicle[0 /* s */];
           front_vehicle_index = j;
         }
+        infront.insert(pair<int, bool>(vehicle[2 /* ID */], true));
       }else if(s>vehicle[0 /* s */]){
         if(vehicle[0 /* s */]>rear_vehicle_s){
-          rear_vehicle_s = vehicle[0];
+          rear_vehicle_s = vehicle[0 /* s */];
           rear_vehicle_index = j;
         }
+        infront.insert(pair<int, bool>(vehicle[2 /* ID */], false));
       }else{
         collision_cost+=COLLISSION_COST;
+        collision_happened = true;
       }
     }
+
+    infront_list.push_back(infront);
+    ids_list.push_back(ids);
 
     bool front_vehicle_exists = front_vehicle_index != -1;
 
     if(front_vehicle_exists){
-      if((front_vehicle_s-s) < 2){
+      if((front_vehicle_s-s) < 15){
         collision_cost+=COLLISSION_COST;
+        collision_happened = true;
       }else if((front_vehicle_s-s)<25){
         buffer_cost+=BUFFER_COST;
         double front_vehicle_ds = curr_time_image[front_vehicle_index][1 /* ds */]; 
@@ -358,7 +376,7 @@ double get_lane_cost(int lane_index, vector<vector<vector<double>>> lane_data, d
         double mx = pow(pct, 2);
         inefficiency_cost+=mx*INEFFICIENCY_COST;
       }else{
-        double gap = front_vehicle_s - s;
+        double gap = front_vehicle_s - s; 
         conjetion_cost+=CONJETION_COST*exp(-0.05*gap);
       }
     }
@@ -366,25 +384,42 @@ double get_lane_cost(int lane_index, vector<vector<vector<double>>> lane_data, d
     bool rear_vehicle_exists = rear_vehicle_index != -1;
 
     if(rear_vehicle_exists){
-      if((s-rear_vehicle_s) < 2){
+      if((s-rear_vehicle_s) < 10){
         collision_cost+=COLLISSION_COST;
-      }else if((s-rear_vehicle_s)<35){
+        collision_happened = true;
+      }else if((s-rear_vehicle_s)<20){
         buffer_cost+=BUFFER_COST;
-      }else{
-        double gap = s - rear_vehicle_s;
-        conjetion_cost+=CONJETION_COST*exp(-0.05*gap);
       }
     }
 
-    cout<<"("<<lane_index<<") "<<"TIMESTAMP: "<<i<<" "<<"FRONT VEHICLE DISTANCE: "<<(front_vehicle_s-s)<<endl;
-
   }
 
-  cout<<"("<<lane_index<<") "<<"COLLISSION_COST: "<<collision_cost<<endl;
-  cout<<"("<<lane_index<<") "<<"BUFFER_COST: "<<buffer_cost<<endl;
-  cout<<"("<<lane_index<<") "<<"INEFFICIENCY_COST: "<<inefficiency_cost<<endl;
-  cout<<"("<<lane_index<<") "<<"CONJETION_COST: "<<conjetion_cost<<endl;
+  map<int, bool> prev_map = infront_list[0];
+  vector<int> prev_ids = ids_list[0];
+  for(int i=1; i<infront_list.size(); i++){
+    vector<int> common;
+    vector<int> curr_ids = ids_list[i];
+    map<int, bool> curr_map = infront_list[i];
+    for(int j=0; j<prev_ids.size(); j++){
+      if(std::find(curr_ids.begin(), curr_ids.end(), prev_ids[j]) != curr_ids.end()) {
+        common.push_back(prev_ids[j]);
+      }
+    }
 
+    for(int j=0; j<common.size(); j++){
+      int id = common[j];
+      if(prev_map.find(id)->second!=curr_map.find(id)->second){
+        collision_cost+=COLLISSION_COST;
+        collision_happened = true;
+      } 
+    }
+    prev_map = curr_map;
+    prev_ids = curr_ids;
+  }
+
+    // if(collision_happened){
+    //   cout<<"("<<lane_index<<") "<<"COLLISSION_COST: "<<collision_cost<<endl;
+    // }
 
   return collision_cost+buffer_cost+inefficiency_cost+conjetion_cost;
 }
@@ -433,13 +468,13 @@ int get_best_lane(double curr_s, double curr_ds, int curr_lane, map<int, vector<
     vector<vector<double>> lane1_image;
     vector<vector<double>> lane2_image;
     for(int j=0; j<image.size();j++){
-      vector<double> snap = image[j];
+      vector<double> snap = image[j]; 
       if(snap[1 /* lane */] == 0){
-        lane0_image.push_back({snap[0 /* s */], snap[2 /* ds */]});
+        lane0_image.push_back({snap[0 /* s */], snap[2 /* ds */], snap[3 /* ID */]});
       }else if(snap[1 /* lane */] == 1){
-        lane1_image.push_back({snap[0 /* s */], snap[2 /* ds */]});
+        lane1_image.push_back({snap[0 /* s */], snap[2 /* ds */], snap[3 /* ID */]});
       }else{
-        lane2_image.push_back({snap[0 /* s */], snap[2 /* ds */]});
+        lane2_image.push_back({snap[0 /* s */], snap[2 /* ds */], snap[3 /* ID */]});
       }
     }
     lane0.push_back(lane0_image);
@@ -459,7 +494,16 @@ int get_best_lane(double curr_s, double curr_ds, int curr_lane, map<int, vector<
     lane_costs.push_back(get_lane_cost(possible_lanes[i],curr_lane_data, curr_s, curr_ds));
   }
 
-  int best = 0;
+  int curr_lane_index = 0;
+  for(int i=0; i<possible_lanes.size(); i++){
+    if(possible_lanes[i] == curr_lane){
+      curr_lane_index = i;
+      break;
+    }
+  }
+
+  int best = curr_lane_index;
+
   for(int i=0; i<lane_costs.size(); i++){
     if(lane_costs[i]<lane_costs[best]){
       best = i;
@@ -515,7 +559,7 @@ int main() {
   }
 
   double ref_vel = 0.0 /* The speed the car should move at */;
-  double lane = 1 /* The lane the car should be in. */;
+  double lane = 1 /* The starting lane of the car. */;
   bool changing_lanes = false;
 
   h.onMessage([&map_waypoints_x,&map_waypoints_y,&map_waypoints_s,&map_waypoints_dx,&map_waypoints_dy,&ref_vel, &lane, &gnb, &changing_lanes](uWS::WebSocket<uWS::SERVER> ws, char *data, size_t length,
@@ -611,8 +655,8 @@ int main() {
 
         
           if(!changing_lanes){
-            map<int, vector<vector<double>>> preds = get_predictions(gnb, sensor_fusion, map_waypoints_x, map_waypoints_y);
-            int new_lane = get_best_lane(car_s, car_speed, lane, preds);
+            map<int, vector<vector<double>>> preds = get_predictions(gnb, sensor_fusion, map_waypoints_x, map_waypoints_y); 
+            int new_lane = get_best_lane(car_s-17.65, car_speed, lane, preds);
             if(new_lane != lane){
               changing_lanes=true;
               lane = new_lane;

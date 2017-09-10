@@ -1,7 +1,259 @@
 # CarND-Path-Planning-Project
-Self-Driving Car Engineer Nanodegree Program
+###Implementation
+
+####Overview:
+
+The implementation was done in 3 Steps (each step depends on the previous):
+
+* Smooth Path Generation
+* Driving in a given lane
+* Switching lanes when needed.
+
+####Smooth Path Generation:
+
+Smooth paths where generated using the spline tool as suggested in the classroom. By following the Walkthrough given in the classroom I was able to generate a smooth path consisting of 50 points ahead of the vehicle. The points are split such that at all steps the vehicle stays under the speed and acceleration limits. 
+
+The path generation is done in the following steps
+
+* Set anchor points for the spline (The start point/reference will initially be the car's coordinates and after some trajectory generation has been done will be the last point in the previous trajectory). **Note:** The start yaw can be calculated using the start anchor point and a point before it.
+
+  ```C++
+  refyaw = atan2(refy-refy_prev, refx-refx_prev);
+  ```
+
+  Three more anchor points are generated at `30`, `60` and `90` meters from the start point.
+
+  ```C++
+  vector<double> anchor_pt = getXY(
+    car_s+ d /* meters ahead */, 2+LANE_WIDTH*lane, 
+    map_waypoints_s, map_waypoints_x, map_waypoints_y
+  );
+  ```
+
+* The anchor points are converted from global `(x,y)` Coordinates to the vehicle's local coordinates.
+
+  ```C++
+  /* Tranform from global coordinates to the car's local coordinates */
+  vector<double> tolocal(double x, double y, double refx, double refy, double refyaw){
+    vector<double> local;
+
+    double shift_x = x - refx;
+    double shift_y = y - refy;
+
+    local.push_back(/* x */ (shift_x*cos(0-refyaw) - shift_y*sin(0-refyaw)) /* x */);
+    local.push_back(/* y */ (shift_x*sin(0-refyaw) + shift_y*cos(0-refyaw)) /* y */);
+
+    return local;
+  }	
+  ```
+
+* Check whether there are previous points left over from the last trajectory generation and append them to the new list.
+
+  ```C++
+  for(int i = 0; i < previous_path_x.size(); i++){
+     next_x_vals.push_back(previous_path_x[i]);
+     next_y_vals.push_back(previous_path_y[i]);
+  }
+  ```
+
+* The anchor points are used to make a spline and then for the set of 50 points for the path are completed using it.
+
+  ```C++
+  spline.set_points(ptsx, ptsy); /* Setting Anchor points */
+  .....
+  double target_x = 30; 
+  double target_y = spline(target_x)
+  double target_dist = sqrt(pow(target_x,2) + pow(target_y,2)) /* m */;
+
+  ..... // Generation loop 
+  {
+      double x_point = x_add_on+target_x/N /* m */;
+      double y_point = s(x_point) /* m */;
+    
+    	.......// To global coordinates and add them to the trajectory.
+  }
+  ```
+
+
+
+####Driving in a given Lane:
+
+In order to drive in a given lane we have to avoid collisions with other vehicles in front of us. For that we use the sensor fusion data to extract the vehicle in front of us and then if it is closer to us that a certain range we slow down.
+
+```C++
+.......// Inside search loop {
+  
+  ....... // Other stuff
+  
+  if((check_s>car_s) && (check_s<(car_s+25))){
+    front_car_exists = true;
+    front_car_speed = check_speed;
+    front_car_s = check_s;
+  }
+}
+
+......
+  
+if(front_car_exists){
+  double speed_diff = ref_vel - front_car_speed;
+  if(speed_diff<MAX_ACCEL){
+    ref_vel = front_car_speed /* Drive at the speed of the car in front. */;
+  }else{
+    acceleration = MAX_ACCEL * (1 - exp(-speed_diff));
+    ref_vel -= acceleration /* Slow down */;
+  } 
+}
+```
+
+Moreover if we are accelerating from stand-still, it should smooth such that we don't exceed out acceleration and jerk limits.
+
+```C++
+if(ref_vel<SPEED_LIMIT /* Under our desired speed */){
+  acceleration = MAX_ACCEL * (1 - exp(-(SPEED_LIMIT - ref_vel))) /* Smooth decay */;
+  ref_vel+=acceleration;
+  if(ref_vel>SPEED_LIMIT){
+    ref_vel = SPEED_LIMIT;
+  }
+}
+```
+
+
+
+####Switching Lanes when needed:
+
+In order to decide which lane is the best for us we run through the following steps:
+
+* We predict the positions of the vehicles around us.
+
+  ```c++
+  /* Get predictions for a certain car */
+  vector<vector<double>> getpred(GNB gnb, vector<double> car, int horizon, vector<double> map_waypoints_x, vector<double> map_waypoints_y){
+    int lane = (int)(car[D])/4;
+    
+    ...... // Some code for prediction I didn't use.
+    
+    double car_speed = sqrt(car[VX]*car[VX] + car[VY]*car[VY]);
+
+    vector<vector<double>> predictions;
+    for(int i=0; i<horizon; i++){
+      predictions.push_back({(init_car_s+i*car_speed), (double)lane_, car_speed, car[ID]});
+    }
+    return predictions;
+  }
+  ```
+
+* We then split these predictions in their respective lanes. This will allows us to calculate the cost for each lane independently. The predictions are also separated based on the time-step of the prediction 
+
+  > The state of all the vehicle at a certain time step is being referred to as **image** here. 
+
+  ```C++
+  int get_best_lane(.../* Other params */..., map<int, vector<vector<double>>> predictions)
+    vector<vector<vector<double>>> preds_list /* Covert the map into a list */;
+    
+    .....// Conversion
+      
+    /* Images corresponding to each timestep */
+    vector<vector<vector<double>>> preds_image_list;
    
+    .....// Conversion
+
+    vector<vector<vector<double>>> lane0;
+    vector<vector<vector<double>>> lane1;
+    vector<vector<vector<double>>> lane2;
+
+    for(/* loop over time images */){
+      
+      ......
+        
+      for(int j=0; j<image.size();j++){
+        if(snap[1 /* lane */] == 0){
+          lane0_image.push_back({snap[0 /* s */], snap[2 /* ds */], snap[3 /* ID */]});
+        }else if(snap[1 /* lane */] == 1){
+          lane1_image.push_back({snap[0 /* s */], snap[2 /* ds */], snap[3 /* ID */]});
+        }else{
+          lane2_image.push_back({snap[0 /* s */], snap[2 /* ds */], snap[3 /* ID */]});
+        }
+      }
+      
+      lane0.push_back(lane0_image) /* lane 0 timestep images */;
+      lane1.push_back(lane1_image) /* lane 1 timestep images */;
+      lane2.push_back(lane2_image) /* lane 2 timestep images */;
+  }
+
+  ..... // Iterate over list of possible lanes
+    
+  /* 
+   * For each possible lane calculate cost using ```get_lane_cost()``` 
+   * and choose the best one. 
+   */
+  ```
+
+* The we calculate the cost for each  lane and choose the best one.
+
+  ```C++
+  /* Cost penalties */
+  constexpr double COLLISSION_COST = 1000000;
+  constexpr double BUFFER_COST = 10000;
+  constexpr double INEFFICIENCY_COST = 1000;
+  constexpr double CONJETION_COST = 100;
+
+  /* Get the cost for a certain lane */
+  double get_lane_cost(lane_data, curr_s, curr_ds){
+    
+    double start_s = curr_s;
+
+    /* Initialize all costs */
+    double collision_cost = 0.0;
+    double buffer_cost = 0.0;
+    double inefficiency_cost = 0.0;
+    double conjetion_cost = 0.0;
+    
+    for(/* loop over time images of the current lane */){
+
+      double s = start_s + curr_ds*i /* increment velocity in seconds */;
+   
+      for(/* loop over all the vehicle at a certain time image */){
+   	 if(/* vehicle is in front of us */){
+          if(/* vehicle is the closest to us yet */){
+            front_vehicle_s = vehicle[0 /* s */];
+          }
+        }else if(/* vehicle is behind us */){
+          if(/* is the closest from behind */){
+            rear_vehicle_s = vehicle[0 /* s */];
+          }
+        }else{
+          collision_cost+=COLLISSION_COST /* COLLISION */;
+        }
+      }
+
+      if(/* Front vehicle closer that 15 meters */){
+        collision_cost+=COLLISSION_COST;
+      }else if(/* Otherwise if front vehicle is closer than 25 meters*/){
+        buffer_cost+=BUFFER_COST;
+        pct = (SPEED_LIMIT - front_vehicle velocity)/SPEED_LIMIT;
+        mx = pow(pct, 2);
+        inefficiency_cost+=mx*INEFFICIENCY_COST /* Adding inefficiency cost 
+                                                 * according to the speed of 
+                                                 * the vehicle in front. */;
+      }else{
+        gap = front_vehicle_s - s; 
+        conjetion_cost+=CONJETION_COST*exp(-0.05*gap);
+      }
+
+
+      if(/* Rear vehicle is closer than 10 meters */){
+        collision_cost+=COLLISSION_COST;
+      }else if(/* Otherwise if rear vehicle is closer than 20 meters */){
+        buffer_cost+=BUFFER_COST;
+      }
+    }
+  }
+  ```
+
+  ​
+
 ### Simulator.
+
 You can download the Term3 Simulator which contains the Path Planning Project from the [releases tab (https://github.com/udacity/self-driving-car-sim/releases).
 
 ### Goals
