@@ -1,7 +1,7 @@
 # CarND-Path-Planning-Project
-###Implementation
+### Implementation
 
-####Overview:
+#### Overview:
 
 The implementation was done in 3 Steps (each step depends on the previous):
 
@@ -9,7 +9,7 @@ The implementation was done in 3 Steps (each step depends on the previous):
 * Driving in a given lane
 * Switching lanes when needed.
 
-####Smooth Path Generation:
+#### Smooth Path Generation:
 
 Smooth paths where generated using the spline tool as suggested in the classroom. By following the Walkthrough given in the classroom I was able to generate a smooth path consisting of 50 points ahead of the vehicle. The points are split such that at all steps the vehicle stays under the speed and acceleration limits. 
 
@@ -76,7 +76,7 @@ The path generation is done in the following steps
 
 
 
-####Driving in a given Lane:
+#### Driving in a given Lane:
 
 In order to drive in a given lane we have to avoid collisions with other vehicles in front of us. For that we use the sensor fusion data to extract the vehicle in front of us and then if it is closer to us that a certain range we slow down.
 
@@ -119,7 +119,7 @@ if(ref_vel<SPEED_LIMIT /* Under our desired speed */){
 
 
 
-####Switching Lanes when needed:
+#### Switching Lanes when needed:
 
 In order to decide which lane is the best for us we run through the following steps:
 
