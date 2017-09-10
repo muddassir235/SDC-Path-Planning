@@ -100,6 +100,9 @@ if(front_car_exists){
     ref_vel = front_car_speed /* Drive at the speed of the car in front. */;
   }else{
     acceleration = MAX_ACCEL * (1 - exp(-speed_diff));
+    if(speed_diff>8 /* About to crash, need drastic action without caring for comfort. */){
+      acceleration = 1;
+    }
     ref_vel -= acceleration /* Slow down */;
   } 
 }
@@ -240,17 +243,19 @@ In order to decide which lane is the best for us we run through the following st
         conjetion_cost+=CONJETION_COST*exp(-0.05*gap);
       }
 
-
       if(/* Rear vehicle is closer than 10 meters */){
         collision_cost+=COLLISSION_COST;
       }else if(/* Otherwise if rear vehicle is closer than 20 meters */){
         buffer_cost+=BUFFER_COST;
       }
+
+      if((rear_vehicle_ds-curr_s)>5){ /* Check speed difference to rear vehicle. */
+        buffer_cost+=BUFFER_COST;
+      }
     }
   }
-  ```
 
-  ​
+  ```
 
 ### Simulator.
 
@@ -333,11 +338,11 @@ A really helpful resource for doing this project and creating smooth trajectorie
 * [uWebSockets](https://github.com/uWebSockets/uWebSockets)
   * Run either `install-mac.sh` or `install-ubuntu.sh`.
   * If you install from source, checkout to commit `e94b6e1`, i.e.
-    ```
+  ```
     git clone https://github.com/uWebSockets/uWebSockets 
     cd uWebSockets
     git checkout e94b6e1
-    ```
+    ​```
 
 ## Editor Settings
 

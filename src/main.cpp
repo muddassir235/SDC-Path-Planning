@@ -24,13 +24,14 @@ constexpr double SIMULATOR_PERIOD = 0.02 /* seconds */;
 constexpr double LANE_WIDTH = 4.0 /* m */;
 constexpr double SPEED_LIMIT = 49.5 /* mph */;
 constexpr double TRACK_LENGTH = 6945.554 /* m */;
-constexpr double MAX_ACCEL = 0.300;
+constexpr double MAX_ACCEL = 0.224;
 constexpr double START_S = 124.834 /* m */;
 
 constexpr double COLLISSION_COST = 1000000;
 constexpr double BUFFER_COST = 10000;
 constexpr double INEFFICIENCY_COST = 1000;
 constexpr double CONJETION_COST = 100;
+constexpr double LANE_CHANGE_COST = 20;
 
 constexpr int ID = 0;
 constexpr int X = 1;
@@ -44,7 +45,7 @@ constexpr int D = 6;
 double deg2rad(double x) { return x * pi() / 180; }
 double rad2deg(double x) { return x * 180 / pi(); }
 
-// Checks if the SocketIO event has JSON data.
+// Checks if the SocketIO event has JSON data.      
 // If there is data the JSON object in string format will be returned,
 // else the empty string "" will be returned.
 string hasData(string s) {
@@ -336,6 +337,8 @@ double get_lane_cost(int lane_index, vector<vector<vector<double>>> lane_data, d
     int rear_vehicle_index = -1;
     double front_vehicle_s = 999999;
     double rear_vehicle_s = -999999;
+    double front_vehicle_ds = -1;
+    double rear_vehicle_ds = -1;
 
     for(int j=0; j<curr_time_image.size(); j++){
       vector<double> vehicle = curr_time_image[j];
@@ -344,12 +347,14 @@ double get_lane_cost(int lane_index, vector<vector<vector<double>>> lane_data, d
       if(s<vehicle[0 /* s */]){
         if(vehicle[0 /* s */]<front_vehicle_s){
           front_vehicle_s = vehicle[0 /* s */];
+          front_vehicle_ds = vehicle[1 /* ds */];
           front_vehicle_index = j;
         }
         infront.insert(pair<int, bool>(vehicle[2 /* ID */], true));
       }else if(s>vehicle[0 /* s */]){
         if(vehicle[0 /* s */]>rear_vehicle_s){
           rear_vehicle_s = vehicle[0 /* s */];
+          rear_vehicle_ds = vehicle[1 /* ds */];
           rear_vehicle_index = j;
         }
         infront.insert(pair<int, bool>(vehicle[2 /* ID */], false));
@@ -368,9 +373,8 @@ double get_lane_cost(int lane_index, vector<vector<vector<double>>> lane_data, d
       if((front_vehicle_s-s) < 15){
         collision_cost+=COLLISSION_COST;
         collision_happened = true;
-      }else if((front_vehicle_s-s)<25){
+      }else if((front_vehicle_s-s)<30){
         buffer_cost+=BUFFER_COST;
-        double front_vehicle_ds = curr_time_image[front_vehicle_index][1 /* ds */]; 
         double diff =  SPEED_LIMIT - front_vehicle_ds*MPH_TO_MPS;
         double pct = diff/SPEED_LIMIT;
         double mx = pow(pct, 2);
@@ -384,10 +388,14 @@ double get_lane_cost(int lane_index, vector<vector<vector<double>>> lane_data, d
     bool rear_vehicle_exists = rear_vehicle_index != -1;
 
     if(rear_vehicle_exists){
-      if((s-rear_vehicle_s) < 10){
+      if((s-rear_vehicle_s) < 15){
         collision_cost+=COLLISSION_COST;
         collision_happened = true;
       }else if((s-rear_vehicle_s)<20){
+        buffer_cost+=BUFFER_COST;
+      }
+
+      if((rear_vehicle_ds-curr_s)>5){
         buffer_cost+=BUFFER_COST;
       }
     }
@@ -492,6 +500,12 @@ int get_best_lane(double curr_s, double curr_ds, int curr_lane, map<int, vector<
   for(int i=0;i<possible_lanes.size(); i++){
     vector<vector<vector<double>>> curr_lane_data = lane_data[possible_lanes[i]];
     lane_costs.push_back(get_lane_cost(possible_lanes[i],curr_lane_data, curr_s, curr_ds));
+  }
+
+  for(int i=0;i<possible_lanes.size(); i++){
+    if(possible_lanes[i]!=curr_lane){
+      lane_costs[i]+=LANE_CHANGE_COST;
+    }
   }
 
   int curr_lane_index = 0;
@@ -640,7 +654,10 @@ int main() {
             if(speed_diff<MAX_ACCEL){
               ref_vel = front_car_speed;
             }else{
-              acceleration = MAX_ACCEL * (1 - exp(-speed_diff));
+              acceleration = MAX_ACCEL * (1 - exp(-3*speed_diff));
+              if(speed_diff>8){
+                acceleration = 1;
+              }
               ref_vel -= acceleration;
             } 
           }else{
